@@ -1,0 +1,135 @@
+#!/usr/bin/env ruby
+
+require "RPi_Emulator_Manager"
+
+def cmd_list
+  type = ARGV[1]
+  case type
+  when 'os'
+    @data_manager.os.each do |id,o|
+      puts "#{id}\n\t#{o.name} #{o.details}" +
+        "\n\tHardware available: #{o.hardware_ids.join(", ")}\n\n"
+    end
+  when 'hardware', 'hw'
+    @data_manager.hardware.each do |id,hw|
+      puts "#{id}\n\t#{hw.name}\n\tqemu-system-#{hw.qemu_arch}\n\n"
+    end
+  when 'image', 'img'
+    @data_manager.images.each do |id,img|
+      puts "#{id}\n\t#{img.name}\n\tOperating System: #{img.os_id}\n\tHardware: #{img.hardware_id}\n\n"
+    end
+  else
+    raise ArgumentError.new "no resource for '#{ARGV[1]}' exists"
+  end
+end
+
+def cmd_new
+  type = ARGV[1]
+  case type
+  when 'os'
+    required_args(7)
+    id = ARGV[2]
+    name = ARGV[3]
+    details = ARGV[4]
+    dl_link = ARGV[5]
+    hw_ids = ARGV[6..-1]
+
+    @data_manager.create_os id, name, details, hw_ids, dl_link
+  when 'hardware', 'hw'
+    required_args(6,6)
+    id = ARGV[2]
+    name = ARGV[3]
+    qemu_arch = ARGV[4]
+    qemu_args = ARGV[5]
+
+    @data_manager.create_hardware(id, name, qemu_arch, qemu_args)
+  when 'image', 'img'
+    required_args(5,5)
+    name = ARGV[2]
+    hardware = ARGV[3]
+    os = ARGV[4]
+
+    puts 'Downloading image. This may take a few minutes...'
+    @data_manager.create_image name, hardware, os
+  else
+    raise ArgumentError.new "no resource for '#{ARGV[1]}' exists"
+  end
+end
+
+def cmd_run
+  exec(@data_manager.get_qemu_cmd(ARGV[1]))
+end
+
+def cmd_help
+  cmd = File.basename($PROGRAM_NAME)
+  puts <<-EOF
+#{cmd}
+
+Commands:
+  run:
+    #{cmd} run [image_id]
+
+    Run an image in QEMU.
+
+  new:
+    #{cmd} new [resource]
+
+    Create a new instance of a resource.
+  list, ls:
+    #{cmd} list [resource]
+
+    List all items under a resource.
+
+  help, h:
+    #{cmd} help
+
+    This message.
+
+Resources:
+  os:
+    Operating systems.
+
+  hardware,hw:
+    Hardware devices.
+
+  image,img:
+    Specific images.
+
+  EOF
+end
+
+def required_args(min = nil, max = nil)
+  if !min.nil? && ARGV.size < min
+    raise ArgumentError.new "missing required argument(s)"
+  end
+  if !max.nil? && ARGV.size > max
+    raise ArgumentError.new "more arguments than expected"
+  end
+end
+
+@data_manager = DataManager.new
+command = ARGV.first
+
+begin
+
+case command
+when 'run'
+  required_args(2,2)
+  cmd_run
+when 'new'
+  # required_args checks in cmd_new
+  cmd_new
+when 'list', 'ls'
+  required_args(2,2)
+  cmd_list
+when 'help', 'h'
+  cmd_help
+else
+  raise ArgumentError.new "unknown command '#{command}'"
+end
+
+rescue => e
+  puts e.message
+  puts e.backtrace.join("\n")
+  exit 1
+end
