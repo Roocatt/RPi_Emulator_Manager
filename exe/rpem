@@ -7,8 +7,7 @@ def cmd_list
   case type
   when 'os'
     @data_manager.os.each do |id,o|
-      puts "#{id}\n\t#{o.name} #{o.details}" +
-        "\n\tHardware available: #{o.hardware_ids.join(", ")}\n\n"
+      puts "#{id}\n\t#{o.name} #{o.details}\n\tFirmware: #{o.firmware_id}\n\tHardware available: #{o.hardware_ids.join(", ")}\n\n"
     end
   when 'hardware', 'hw'
     @data_manager.hardware.each do |id,hw|
@@ -17,6 +16,10 @@ def cmd_list
   when 'image', 'img'
     @data_manager.images.each do |id,img|
       puts "#{id}\n\t#{img.name}\n\tOperating System: #{img.os_id}\n\tHardware: #{img.hardware_id}\n\n"
+    end
+  when 'firmware', 'fw'
+    @data_manager.firmware.each do |id,f|
+      puts "#{id}\n\t#{f.dl_link}\n\n"
     end
   else
     raise ArgumentError.new "no resource for '#{ARGV[1]}' exists"
@@ -31,10 +34,11 @@ def cmd_new
     id = ARGV[2]
     name = ARGV[3]
     details = ARGV[4]
-    dl_link = ARGV[5]
-    hw_ids = ARGV[6..-1]
+    firmware_id = ARGV[5]
+    dl_link = ARGV[6]
+    hw_ids = ARGV[7..-1]
 
-    @data_manager.create_os id, name, details, hw_ids, dl_link
+    @data_manager.create_os id, name, details, firmware_id, hw_ids, dl_link
   when 'hardware', 'hw'
     required_args(6,6)
     id = ARGV[2]
@@ -56,8 +60,41 @@ def cmd_new
   end
 end
 
-def cmd_run
-  exec(@data_manager.get_qemu_cmd(ARGV[1]))
+def cmd_rm
+  type = ARGV[1]
+  id = ARGV[2]
+
+  case type
+  when 'os'
+    raise ArgumentError.new "no operating system found for id '#{id}'" unless @data_manager.has_resource? :os, id.to_sym
+    @data_manager.delete_resource(:os, id)
+  when 'hardware', 'hw'
+    raise ArgumentError.new "no hardware found for id '#{id}'" unless @data_manager.has_resource? :hardware, id.to_sym
+    @data_manager.delete_resource(:hardware, id)
+  when 'image', 'img'
+    raise ArgumentError.new "no image found for id '#{id}'" unless @data_manager.has_resource? :image, id.to_sym
+    @data_manager.delete_resource(:image, id)
+  when 'firmware', 'fw'
+    raise ArgumentError.new "no firmware found for id '#{id}'" unless @data_manager.has_resource? :firmware, id.to_sym
+    @data_manager.delete_resource(:firmware, id)
+  else
+    raise ArgumentError.new "no resource for '#{ARGV[1]}' exists"
+  end
+end
+
+def cmd_run(img_id = ARGV[1])
+  cmd = @data_manager.get_qemu_cmd(img_id)
+  puts cmd
+  exec(cmd)
+end
+
+def cmd_rl
+  raise ArgumentError.new 'no last image run data' if @data_manager.last_image.nil?
+  cmd_run @data_manager.last_image
+end
+
+def cmd_update
+  @data_manager.update_defaults
 end
 
 def cmd_help
@@ -66,19 +103,35 @@ def cmd_help
 #{cmd}
 
 Commands:
+  rl:
+    #{cmd} rl
+
+    Run the last run image.
   run:
     #{cmd} run [image_id]
 
     Run an image in QEMU.
 
   new:
-    #{cmd} new [resource]
+    #{cmd} new [resource] [...]
 
     Create a new instance of a resource.
+
+  rm:
+    #{cmd} rm [resource] [id]
+
+    Delete an existing resource. Only works on user created resources.
+
   list, ls:
     #{cmd} list [resource]
 
     List all items under a resource.
+
+  update:
+    #{cmd} update
+
+    Replace all default installed resources with the latest defaults. All user
+    created resources are left unchanged.
 
   help, h:
     #{cmd} help
@@ -94,6 +147,9 @@ Resources:
 
   image,img:
     Specific images.
+
+  firmware,fw:
+    Firmware versions.
 
   EOF
 end
@@ -113,15 +169,24 @@ command = ARGV.first
 begin
 
 case command
+when 'rl'
+  required_args(1,1)
+  cmd_rl
 when 'run'
   required_args(2,2)
   cmd_run
 when 'new'
   # required_args checks in cmd_new
   cmd_new
+when 'rm'
+  required_args(3,3)
+  cmd_rm
 when 'list', 'ls'
   required_args(2,2)
   cmd_list
+when 'update'
+  required_args(1,1)
+  cmd_update
 when 'help', 'h'
   cmd_help
 else
@@ -129,7 +194,10 @@ else
 end
 
 rescue => e
-  puts e.message
-  puts e.backtrace.join("\n")
+  if e.is_a?  ArgumentError
+    puts e.message
+  else
+    puts e.full_message
+  end
   exit 1
 end

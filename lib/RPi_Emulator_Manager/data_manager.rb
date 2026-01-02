@@ -1,86 +1,10 @@
 # frozen_string_literal: true
 
-require 'zlib'
 require 'fileutils'
-require 'open-uri'
 require 'json'
 
-DEFAULT_JSON = {
-  hardware: [ # TODO fix file path, and check all args (4b is good)
-    {
-      id: :rpi4b,
-      name: 'RaspberryPi 4B',
-      qemu_arch: 'aarch64',
-      is_default: true,
-      qemu_args: '-machine raspi4b -M virt -cpu cortex-a53 -smp 4 -m 4g -drive file=./arm64.img,if=none,id=hd0,media=disk,format=raw -device virtio-blk-device,drive=hd0 -netdev type=user,id=net0 -device virtio-net-device,netdev=net0,mac=00:11:22:33:44:55 -bios QEMU_EFI.fd -nographic'
-    },
-    {
-      id: :rpi3b,
-      name: 'RaspberryPi 3B',
-      qemu_arch: 'aarch64',
-      is_default: true,
-      qemu_args: '-machine raspi3b -M virt -cpu cortex-a53 -smp 4 -m 4g -drive file=./arm64.img,if=none,id=hd0,media=disk,format=raw -device virtio-blk-device,drive=hd0 -netdev type=user,id=net0 -device virtio-net-device,netdev=net0,mac=00:11:22:33:44:55 -bios QEMU_EFI.fd -nographic'
-    },
-    {
-      id: :rpi3ap,
-      name: 'RaspberryPi 3A+',
-      qemu_arch: 'aarch64',
-      is_default: true,
-      qemu_args: '-machine raspi3ap -M virt -cpu cortex-a53 -smp 4 -m 4g -drive file=./arm64.img,if=none,id=hd0,media=disk,format=raw -device virtio-blk-device,drive=hd0 -netdev type=user,id=net0 -device virtio-net-device,netdev=net0,mac=00:11:22:33:44:55 -bios QEMU_EFI.fd -nographic'
-    },
-    {
-      id: :rpi2b,
-      name: 'RaspberryPi 2B',
-      qemu_arch: 'aarch64',
-      is_default: true,
-      qemu_args: '-machine raspi2b -M virt -cpu cortex-a53 -smp 4 -m 4g -drive file=./arm64.img,if=none,id=hd0,media=disk,format=raw -device virtio-blk-device,drive=hd0 -netdev type=user,id=net0 -device virtio-net-device,netdev=net0,mac=00:11:22:33:44:55 -bios QEMU_EFI.fd -nographic'
-    },
-    {
-      id: :rpi1ap,
-      name: 'RaspberryPi 1A+',
-      qemu_arch: 'arm',
-      is_default: true,
-      qemu_args: '-machine raspi1ap -M virt -cpu cortex-a53 -smp 4 -m 4g -drive file=./arm64.img,if=none,id=hd0,media=disk,format=raw -device virtio-blk-device,drive=hd0 -netdev type=user,id=net0 -device virtio-net-device,netdev=net0,mac=00:11:22:33:44:55 -bios QEMU_EFI.fd -nographic'
-    },
-    {
-      id: :rpi0,
-      name: 'RaspberryPi Zero',
-      qemu_arch: 'aarch64',
-      is_default: true,
-      qemu_args: '-machine raspi0 -M virt -cpu cortex-a53 -smp 4 -m 4g -device virtio-blk-device,drive=hd0 -netdev type=user,id=net0 -device virtio-net-device,netdev=net0,mac=00:11:22:33:44:55 -bios QEMU_EFI.fd -nographic'
-    }
-  ],
-  os: [
-    {
-      id: :netbsd_aarch64,
-      name: 'NetBSD',
-      details: 'v10 aarch64',
-      is_default: true,
-      hardware_ids: [ :rpi2b, :rpi3ap, :rpi3b, :rpi4b ],
-      dl_link: 'https://nycdn.netbsd.org/pub/NetBSD-daily/netbsd-10/latest/evbarm-aarch64/binary/gzimg/arm64.img.gz'
-    },
-    {
-      id: :netbsd_armv7,
-      name: 'NetBSD',
-      details: 'v10 armv7',
-      is_default: true,
-      hardware_ids: [ :rpi2b, :rpi3ap, :rpi3b ],
-      dl_link: 'https://nycdn.netbsd.org/pub/NetBSD-daily/netbsd-10/latest/evbarm-earmv7hf/binary/gzimg/armv7.img.gz'
-    },
-    {
-      id: :netbsd_armv6,
-      name: 'NetBSD',
-      details: 'v10 armv6',
-      is_default: true,
-      hardware_ids: [ :rpi1ap ],
-      dl_link: 'http://nycdn.netbsd.org/pub/NetBSD-daily/netbsd-10/latest/evbarm-earmv6hf/binary/gzimg/rpi.img.gz'
-    }
-  ],
-  image: []
-}
-
 class DataManager
-  attr_reader :images, :os, :hardware
+  attr_reader :images, :os, :hardware, :last_image, :firmware
 
   def initialize(data_root = "#{Dir.home}/.rpem")
     @data_root = data_root
@@ -88,16 +12,19 @@ class DataManager
     @hardware = {}
     @os = {}
     @images = {}
-
+    @firmware = {}
+    @last_image = nil
 
     Dir.mkdir data_root unless Dir.exist? data_root
     image_dir = File.join(data_root, 'images')
     Dir.mkdir image_dir unless Dir.exist? image_dir
+    fw_dir = File.join(data_root, 'fw')
+    Dir.mkdir fw_dir unless Dir.exist? fw_dir
 
     if File.exist? @data_file
       load_data(@data_file)
     else
-      File.write(@data_file, JSON.dump(DEFAULT_JSON))
+      File.write(@data_file, JSON.dump(Defaults.get_defaults))
       load_data(@data_file)
     end
   end
@@ -106,7 +33,8 @@ class DataManager
     output = {
       hardware: [],
       os: [],
-      image: []
+      image: [],
+      firmware: [],
     }
     @hardware.each do |hardware_id, hardware|
       output[:hardware] << {
@@ -125,6 +53,7 @@ class DataManager
         is_default: operating_system.is_default,
         hardware_ids: operating_system.hardware_ids,
         dl_link: operating_system.dl_link,
+        firmware_id: operating_system.firmware_id,
       }
     end
     @images.each do |image_id, image|
@@ -134,6 +63,13 @@ class DataManager
         hardware_id: image.hardware_id,
       }
     end
+    @firmware.each do |firmware_id, firmware|
+      output[:firmware] << {
+        id: firmware_id,
+        dl_link: firmware.dl_link,
+      }
+    end
+    output[:last_image] = @last_image
     JSON.dump(output)
   end
 
@@ -149,21 +85,7 @@ class DataManager
 
     raise ArgumentError.new "identical image named '#{name}' with os '#{os_id}' and hardware '#{hardware_id}'" if self.has_resource? :image, new_image.id
 
-    dl_path = @os[os_id.to_sym].dl_link
-    is_gzip = dl_path.end_with? '.gz'
-    image_destination = File.join(@data_root, 'images', "#{new_image.id}.img")
-    download_destination = "#{image_destination}#{if is_gzip then '.gz' else '' end}"
-    download = URI.open(dl_path)
-    IO.copy_stream(download, File.open(download_destination, 'w'))
-
-    if is_gzip
-      Zlib::GzipReader.open(download_destination) do |gz|
-        File.open(image_destination, 'wb') do |file|
-          file.write gz.read
-        end
-      end
-      File.delete(download_destination)
-    end
+    new_image.ensure_present(@os[os_id.to_sym].dl_link)
     @images[new_image.id] = new_image
     self.save
     nil
@@ -178,24 +100,33 @@ class DataManager
     self.save
   end
 
-  def create_os(id, name, details, hardware_ids, dl_link)
+  def create_os(id, name, details, firmware_id, hardware_ids, dl_link)
     raise ArgumentError.new "operating system already present for id '#{id}'" if self.has_resource? :os, id.to_sym
     hardware_ids.each do |hw_id|
       raise ArgumentError.new "no hardware found for id '#{hw_id}'" unless self.has_resource? :hardware, hw_id.to_sym
     end
+    raise ArgumentError.new "no firmware found for id '#{firmware_id}'" unless self.has_resource? :firmware, firmware_id.to_sym
 
-    new_os = OperatingSystem.new(name, details, false, hardware_ids, dl_link)
+    new_os = OperatingSystem.new(name, details, false, hardware_ids, dl_link, firmware_id)
     @os[id] = new_os
     self.save
   end
 
+  def create_firmware(id, dl_link)
+    raise ArgumentError.new "firmware already present for id '#{id}'" if self.has_resource? :firmware, id.to_sym
+    firmware = Firmware.new(id, dl_link, false)
+    firmware.ensure_present(File.join(@data_root, "fw"))
+    @firmware[id] = firmware
+  end
+
   def get_qemu_cmd(img_id)
-    raise ArgumentError.new "no image found for id '#{os}'" unless self.has_resource? :image, img_id.to_sym
+    raise ArgumentError.new "no image found for id '#{img_id}'" unless self.has_resource? :image, img_id.to_sym
 
     image = @images[img_id.to_sym]
+    fw = @firmware[@os[image.os_id.to_sym].firmware_id.to_sym]
     hardware = @hardware[image.hardware_id.to_sym]
 
-    "qemu-system-#{hardware.qemu_arch} #{hardware.qemu_args} #{build_disk_arg(image.id)}"
+    "qemu-system-#{hardware.qemu_arch} #{build_disk_arg(image.id)} #{hardware.qemu_args} #{build_fw_arg(fw.ensure_present(File.join(@data_root, "fw")))}"
   end
 
   def has_resource?(resource, id)
@@ -206,9 +137,48 @@ class DataManager
       return @hardware.include? id.to_sym
     when :image
       return @images.include? id.to_sym
+    when :firmware
+      return @firmware.include? id.to_sym
     else
       nil
     end
+  end
+
+  def delete_resource(resource, id)
+    case resource
+    when :os
+      raise ArgumentError.new("cannot delete default resource") if @os[id.to_sym].is_default
+      @os.delete(id.to_sym)
+    when :hardware
+      raise ArgumentError.new("cannot delete default resource") if @hardware[id.to_sym].is_default
+      @hardware.delete(id.to_sym)
+    when :image
+      @os.delete(id.to_sym)
+    when :firmware
+      raise ArgumentError.new("cannot delete default resource") if firmware[id.to_sym].is_default
+      @firmware.delete(id.to_sym)
+    else
+      nil
+    end
+    self.save
+  end
+
+  # TODO user created resources may reference defaults that are deleted. Or new defaults may conflict IDs
+  def update_defaults
+    # images are always user created so ignore
+    user_os = @os.filter { |k,o| !o.is_default }
+    user_hw = @hardware.filter { |k,hw| !hw.is_default }
+    user_fw = @firmware.filter { |k,fw| !fw.is_default }
+
+    File.write(@data_file, JSON.dump(Defaults.get_defaults))
+    @os = {}
+    @hardware = {}
+    @firmware = {}
+    load_data(@data_file)
+    @os.merge!(user_os)
+    @hardware.merge!(user_hw)
+    @firmware.merge!(user_fw)
+    self.save
   end
 
   private
@@ -221,15 +191,23 @@ class DataManager
     end
     json_data[:os].each do |os_entry|
       @os[os_entry[:id].to_sym] = OperatingSystem.new(os_entry[:name], os_entry[:details], os_entry[:is_default],
-                                               os_entry[:hardware_ids].map { |id| id.to_sym }, os_entry[:dl_link])
+                                               os_entry[:hardware_ids].map { |id| id.to_sym }, os_entry[:dl_link], os_entry[:firmware_id])
     end
     json_data[:image].each do |image_entry|
       image = Image.new(image_entry[:name], image_entry[:hardware_id], image_entry[:os_id])
       @images[image.id.to_sym] = image
     end
+    json_data[:firmware].each do |firmware_entry|
+      @firmware[firmware_entry[:id].to_sym] = Firmware.new(firmware_entry[:id], firmware_entry[:dl_link], firmware_entry[:is_default])
+    end
+    @last_image = json_data[:last_image]
   end
 
   def build_disk_arg(name)
     "-drive file=#{File.join(@data_root, '/images/', "#{name}.img")},if=none,id=hd0,media=disk,format=raw"
+  end
+
+  def build_fw_arg(name)
+    "-bios #{name}"
   end
 end
