@@ -41,6 +41,15 @@ class Defaults
       ],
       os: [
         {
+          id: :freebsd_aarch64,
+          name: 'FreeBSD',
+          details: 'v15.0 aarch64',
+          is_default: true,
+          firmware_id: :aarch64_tianocore_edk2,
+          hardware_ids: [ :rpi4b, :rpi3b ],
+          dl_link: 'https://download.freebsd.org/releases/VM-IMAGES/15.0-RELEASE/aarch64/Latest/FreeBSD-15.0-RELEASE-arm64-aarch64-ufs.raw.xz'
+        },
+        {
           id: :netbsd_aarch64,
           name: 'NetBSD',
           details: 'v10 aarch64',

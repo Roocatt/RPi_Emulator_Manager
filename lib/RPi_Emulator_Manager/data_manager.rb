@@ -85,7 +85,7 @@ class DataManager
 
     raise ArgumentError.new "identical image named '#{name}' with os '#{os_id}' and hardware '#{hardware_id}'" if self.has_resource? :image, new_image.id
 
-    new_image.ensure_present(@os[os_id.to_sym].dl_link)
+    new_image.ensure_present(File.join(@data_root, 'images'), @os[os_id.to_sym].dl_link)
     @images[new_image.id] = new_image
     self.save
     nil
